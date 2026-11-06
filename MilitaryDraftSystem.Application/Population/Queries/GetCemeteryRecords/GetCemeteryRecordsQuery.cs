@@ -1,4 +1,4 @@
-using MediatR;
+using MilitaryDraftSystem.Application.Common.Contracts;
 
 namespace MilitaryDraftSystem.Application.Population.Queries.GetCemeteryRecords
 {
@@ -7,5 +7,5 @@ namespace MilitaryDraftSystem.Application.Population.Queries.GetCemeteryRecords
     /// with who they were, when and how they died, and whether their original
     /// record still exists in the population table.
     /// </summary>
-    public sealed record GetCemeteryRecordsQuery : IRequest<IReadOnlyList<CemeteryRecordDto>>;
+    public sealed record GetCemeteryRecordsQuery : IQuery<IReadOnlyList<CemeteryRecordDto>>;
 }

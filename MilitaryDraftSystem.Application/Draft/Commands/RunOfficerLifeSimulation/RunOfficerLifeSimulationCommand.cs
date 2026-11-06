@@ -1,4 +1,4 @@
-using MediatR;
+using MilitaryDraftSystem.Application.Common.Contracts;
 
 namespace MilitaryDraftSystem.Application.Draft.Commands.RunOfficerLifeSimulation
 {
@@ -6,5 +6,5 @@ namespace MilitaryDraftSystem.Application.Draft.Commands.RunOfficerLifeSimulatio
     /// Simulates the passage of time for every active recruitment officer:
     /// resignation, accidental death, suicide, or death on duty may occur.
     /// </summary>
-    public sealed record RunOfficerLifeSimulationCommand : IRequest;
+    public sealed record RunOfficerLifeSimulationCommand : ICommand;
 }

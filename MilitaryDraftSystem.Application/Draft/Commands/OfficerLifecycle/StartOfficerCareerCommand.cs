@@ -1,4 +1,4 @@
-using MediatR;
+using MilitaryDraftSystem.Application.Common.Contracts;
 
 namespace MilitaryDraftSystem.Application.Draft.Commands.OfficerLifecycle
 {
@@ -10,5 +10,5 @@ namespace MilitaryDraftSystem.Application.Draft.Commands.OfficerLifecycle
     /// player is simply the current special case of this future multiplayer
     /// model.
     /// </summary>
-    public sealed record StartOfficerCareerCommand(Guid PlayerId, string FullName, string Department) : IRequest<Guid>;
+    public sealed record StartOfficerCareerCommand(Guid PlayerId, string FullName, string Department) : ICommand<Guid>;
 }

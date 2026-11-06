@@ -1,4 +1,4 @@
-using MediatR;
+using MilitaryDraftSystem.Application.Common.Contracts;
 
 namespace MilitaryDraftSystem.Application.Population.Commands.PurgeDeceasedCitizens
 {
@@ -8,5 +8,5 @@ namespace MilitaryDraftSystem.Application.Population.Commands.PurgeDeceasedCitiz
     /// table lean. Their history is preserved separately via cemetery records
     /// and death statistics, which are never deleted.
     /// </summary>
-    public sealed record PurgeDeceasedCitizensCommand : IRequest;
+    public sealed record PurgeDeceasedCitizensCommand : ICommand;
 }

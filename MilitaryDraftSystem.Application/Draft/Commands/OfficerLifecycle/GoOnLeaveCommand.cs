@@ -1,4 +1,4 @@
-using MediatR;
+using MilitaryDraftSystem.Application.Common.Contracts;
 
 namespace MilitaryDraftSystem.Application.Draft.Commands.OfficerLifecycle
 {
@@ -6,5 +6,5 @@ namespace MilitaryDraftSystem.Application.Draft.Commands.OfficerLifecycle
     /// Sends a recruitment officer on temporary leave. They stop being able to
     /// draft citizens but may return to active duty later.
     /// </summary>
-    public sealed record GoOnLeaveCommand(Guid RecruitmentOfficerId) : IRequest;
+    public sealed record GoOnLeaveCommand(Guid RecruitmentOfficerId) : ICommand;
 }

@@ -1,4 +1,4 @@
-using MediatR;
+using MilitaryDraftSystem.Application.Common.Contracts;
 
 namespace MilitaryDraftSystem.Application.Draft.Queries.GetRecruitmentOfficerStats
 {
@@ -7,5 +7,5 @@ namespace MilitaryDraftSystem.Application.Draft.Queries.GetRecruitmentOfficerSta
     /// of a recruitment officer.
     /// </summary>
     public sealed record GetRecruitmentOfficerStatsQuery(Guid RecruitmentOfficerId)
-        : IRequest<RecruitmentOfficerStatsDto>;
+        : IQuery<RecruitmentOfficerStatsDto>;
 }
