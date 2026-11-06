@@ -1,26 +1,27 @@
 # Military Draft System
 
-This is a small simulation built with .NET 10, ASP.NET Core, MediatR and EF Core (SQLite). It models a population of citizens who are born, age, die of old age or misfortune, and — if they meet certain conditions — get drafted into military service, either automatically by "recruitment agents" or manually by a human recruitment officer through the API. Recruitment officers themselves have a full life cycle too: a player can take one on leave, resign, retire, be fired, or have them die, and every citizen or officer death leaves a permanent historical trace even after the underlying row is eventually purged. There is no UI; the interesting part of the system runs entirely in the background as a set of hosted services that keep ticking for as long as the process is alive.
+A small simulated world, built as a full-stack playground: a .NET 10 / ASP.NET Core backend (MediatR, EF Core over SQLite) that quietly keeps a population alive in the background, and an Angular 22 client that lets a human being look in on it and occasionally meddle. Citizens are born, grow up, live out a natural lifespan or meet an earlier end, and — if they qualify — get drafted into military service, either by an automatic recruitment agent or by a human recruitment officer acting through the UI. Officers have their own life cycle: leave, resignation, retirement, dismissal, death — and every ending, citizen or officer, leaves a permanent mark in the historical record even after the original row is swept away. Dust to dust, as it were, but the cemetery keeps the receipts.
 
-This document walks through the actual runtime flow, from process startup to a steady-state simulation loop, following the code as it exists today rather than describing an idealized design.
+This document walks through the system as it actually behaves today — backend first, then the client sitting on top of it — rather than describing an idealized design nobody got around to building.
 
 ## Solution layout
 
-The solution follows a fairly standard Clean Architecture split:
+The backend follows a fairly standard Clean Architecture split, and the frontend is its own self-contained Angular workspace sitting next to it:
 
-- **`MilitaryDraftSystem.Domain`** — entities (`Citizen`, `RecruitmentOfficer`, `Player`, `AutomaticRecruitmentAgent`, `God`, `Summons`, `CemeteryRecord`, `DeathStatistic`, `WorkerLifecycleStatistic`), value objects, enums, and domain events. No dependencies on anything else.
-- **`MilitaryDraftSystem.Application`** — MediatR commands/queries, their handlers, pipeline behaviors, application-level events and their handlers, and the interfaces the application needs from the outside world (`IAppDbContext`, `IRandomProvider`, `IWorldNarrator`).
+- **`MilitaryDraftSystem.Domain`** — entities (`Citizen`, `RecruitmentOfficer`, `Player`, `AutomaticRecruitmentAgent`, `God`, `Summons`, `CemeteryRecord`, `DeathStatistic`, `WorkerLifecycleStatistic`), value objects, enums, and domain events. Depends on nothing else in the solution — the innermost circle.
+- **`MilitaryDraftSystem.Application`** — MediatR commands/queries, their handlers, pipeline behaviors, application-level events and their handlers, and the interfaces the application needs from the outside world (`IAppDbContext`, `IRandomProvider`, `IWorldNarrator`). Every command implements the explicit `ICommand` / `ICommand<TResponse>` marker contract and every query implements `IQuery<TResponse>` (both in `Common/Contracts`), so the pipeline can tell state-changing operations apart from read-only ones without guessing from naming conventions or reflection — see "The MediatR pipeline" below.
 - **`MilitaryDraftSystem.Infrastructure`** — EF Core `DbContext`, migrations, seeders, the SaveChanges interceptor, and the hosted (background) services that drive the whole simulation.
 - **`MilitaryDraftSystem.API`** — the composition root (`Program.cs`) and two controllers: one for drafting and officer lifecycle/stats, one for population-wide cemetery and historical statistics.
 - **`MilitaryDraftSystem.Tests`** — xUnit tests covering the MediatR pipeline behaviors, domain entity behavior (citizen mortality, officer lifecycle), and the command/query handlers built on top of them.
+- **`MilitaryDraftSystem.Web`** — the Angular 22 client: standalone components, Signals for state, zoneless change detection, functional HTTP interceptors, reactive forms, and lazy-loaded feature routes. Talks to the API over plain HTTP and renders whatever it gets back — no business logic is duplicated on this side of the wire.
 
-There is no separate "worker" project — the API project hosts both the HTTP endpoints and the background simulation, since ASP.NET Core's `WebApplication` is also a generic host that can run `IHostedService` implementations alongside the web server.
+There is no separate "worker" process on the backend — the API project hosts both the HTTP endpoints and the background simulation, since ASP.NET Core's `WebApplication` is also a generic host that can run `IHostedService` implementations alongside the web server. The frontend, in turn, has no backend-for-frontend layer of its own; it is a thin client against the real API, gaps and all.
 
 ## Origins
 
-This project started as a small learning experiment focused on MediatR and hosted background services in ASP.NET Core. As new concepts and ideas were explored, it gradually evolved into a larger full-stack simulation with its own domain model, application architecture, persistent world state, background simulation and web client.
+This project started as a small learning experiment focused on MediatR and hosted background services in ASP.NET Core. As new ideas got bolted on, it slowly turned into a proper full-stack simulation: its own domain model, an application layer with a real pipeline, persistent world state, a background simulation loop, and eventually a web client to look at all of it without opening a SQLite browser.
 
-The original version is preserved in the [project graveyard](https://github.com/zarar384/my_git_test/tree/master/project-graveyard/military-draft-system-mediatr), where the project's earlier development can still be traced.
+The original version is preserved in the [project graveyard](https://github.com/zarar384/my_git_test/tree/master/project-graveyard/military-draft-system-mediatr), where the project's earlier, rougher development can still be traced — every project has an Eden it grew out of.
 
 ## Startup
 
@@ -34,8 +35,11 @@ Everything is wired up in `MilitaryDraftSystem.API/Program.cs`. Reading it top t
 - EF Core is configured with SQLite, and a `DomainEventsInterceptor` is attached to the `DbContext` via `AddInterceptors`. This interceptor is how domain events raised inside entities eventually reach MediatR — more on this below.
 - Three MediatR pipeline behaviors are registered as open generics: `ValidationBehavior<,>`, `LoggingBehavior<,>`, `TransactionBehavior<,>`. Order matters here, and it's explained in the pipeline section.
 - Six hosted services are registered, also in a specific order: `DatabaseInitializationService`, `PopulationGenerationHostedService`, `AutomaticRecruitmentHostedService`, `PopulationSimulationHostedService`, `OfficerLifeSimulationHostedService`, `CitizenCleanupHostedService`.
+- Critical configuration (`ConnectionStringsOptions`, `AuthenticationOptions`) is bound with `ValidateDataAnnotations().ValidateOnStart()`, so the process fails fast at startup instead of surfacing a missing/invalid setting later inside a request or hosted service.
 
 When `app.Run()` is called, the generic host starts every registered `IHostedService` in registration order. `IHostedService.StartAsync` is awaited sequentially before the next one starts, which is why database initialization is listed first — the background loops that follow all assume the database already exists and is migrated.
+
+The whole bootstrap sequence runs inside a top-level `try/catch` around a Serilog bootstrap logger. Any exception that escapes startup — a failed `ValidateOnStart`, a failed migration, or anything else — is logged via `Log.Fatal`, `Log.CloseAndFlush()` guarantees the log sinks are flushed before the process exits, and `Environment.ExitCode` is set to `1` so the process actually reports failure to whatever is supervising it (shell, systemd, container orchestrator), instead of exiting with code `0` on a critical startup failure. `HostAbortedException` is explicitly excluded from this handling, since `WebApplicationFactory<Program>` (used by the integration tests) relies on it to stop the host right after `Build()` without that being treated as a real failure.
 
 ## Database initialization and seeding
 
@@ -80,17 +84,26 @@ These loops are the actual "engine" of the simulation — the API controllers ar
 
 ## The MediatR pipeline
 
-Every command sent through `ISender.Send` — whether triggered by a background loop or by the API controller — passes through the same three pipeline behaviors, in registration order:
+Every request sent through `ISender.Send` — whether triggered by a background loop or by the API controller — passes through the same open-generic pipeline registration, in this order:
 
 ```
 ValidationBehavior -> LoggingBehavior -> TransactionBehavior -> actual handler
 ```
 
+`ValidationBehavior` and `LoggingBehavior` apply to every request, command or query. `TransactionBehavior<TRequest, TResponse>` is constrained with `where TRequest : ICommand<TResponse>`, so for a query (which implements `IQuery<TResponse>`, not `ICommand<TResponse>`) the DI container simply cannot close that generic — the behavior is never resolved for it. This means the effective pipeline differs by request kind:
+
+```
+Command -> Validation -> Logging -> Transaction -> Handler
+Query   -> Validation -> Logging ->                 Handler
+```
+
+This distinction is made through an explicit application contract, not through naming conventions, namespaces, or reflection: every command type implements `ICommand` (for `IRequest`) or `ICommand<TResponse>` (for `IRequest<TResponse>`), and every query type implements `IQuery<TResponse>`, both defined in `MilitaryDraftSystem.Application/Common/Contracts`.
+
 **`ValidationBehavior`** looks up all `IValidator<TRequest>` instances registered for the request type. If there are none (most commands here don't have a validator), it just calls `next()`. If validators exist, it runs them in parallel, collects every `ValidationFailure` from every validator, and throws a single `FluentValidation.ValidationException` if anything failed. Because this runs first, a validation failure never reaches logging, the transaction, or the handler.
 
 **`LoggingBehavior`** wraps the call to `next()`, logs before and after, and returns whatever `next()` returned. There is nothing more to it — it's a thin diagnostic wrapper, not a source of side effects.
 
-**`TransactionBehavior`** opens a database transaction (`IAppDbContext.BeginTransactionAsync`, backed by `EfTransaction` wrapping EF Core's own transaction), invokes `next()`, and commits on success or rolls back and rethrows on any exception. This is the last behavior before the actual handler, so the handler runs entirely inside this transaction.
+**`TransactionBehavior`** opens a database transaction (`IAppDbContext.BeginTransactionAsync`, backed by `EfTransaction` wrapping EF Core's own transaction), invokes `next()`, and commits on success or rolls back and rethrows on any exception. It only ever runs for commands, so read-only queries never pay for — or risk — an explicit transaction they don't need.
 
 The ordering is deliberate: you don't want to open a database transaction for a request that's going to fail validation anyway, and you do want logging to observe the full duration of the transactional unit of work, not just the inner handler call.
 
@@ -211,6 +224,43 @@ The API is protected by a simple API key scheme (`ApiKeyAuthenticationHandler` i
 
 `Summons` now has a real lifecycle instead of sitting permanently in `Created`. The entity exposes `MarkDelivered()`, `MarkAttended()`, `MarkMissed()`, `Cancel()` and `Expire()`, each guarded so only valid transitions are allowed (for example, you can't attend a summons that was never delivered, and you can't cancel one that's already been attended or missed). Both drafting paths — `DraftCitizenCommandHandler` and `RunAutomaticRecruitmentCommandHandler` — call `MarkDelivered()` right after creating the summons, since delivery is treated as instantaneous in this simulation. Nothing currently drives a summons to `Attended`, `Missed`, `Cancelled` or `Expired` — those transitions exist on the entity and are ready to be wired into a future workflow (for example, a background check some time after issuance), but no such workflow exists yet.
 
+## The frontend: MilitaryDraftSystem.Web
+
+`MilitaryDraftSystem.Web` is an Angular 22 application generated with the CLI and left close to its defaults, architecturally. It is a window into the same API described above — nothing more. It does not re-implement draft eligibility, officer lifecycle rules, or any other business logic client-side; every write goes to the backend, and the UI just reflects whatever comes back, success or failure. If you want to know *why* a citizen can or can't be drafted, the answer lives in `Citizen.IsEligibleForDraft` on the backend, not in a TypeScript guard somewhere.
+
+A few architectural choices were made early and kept consistent everywhere:
+
+- **Standalone components, no `NgModule`s.** Every component declares its own `imports` array. Routing is wired through `provideRouter` in `app.config.ts`, not a root module.
+- **Zoneless change detection.** `provideZonelessChangeDetection()` is enabled, and every component sets `changeDetection: ChangeDetectionStrategy.OnPush`. There is no Zone.js patching `setTimeout` behind your back — updates happen because a signal changed, not because something, somewhere, ticked.
+- **Signals as the only state primitive.** Feature "stores" (`OfficersStore`, `CemeteryStore`, `StatisticsStore`, `StartCareerStore`, `CurrentOfficerStore`) are plain injectable classes holding private `signal()`s, exposing `asReadonly()` views and `computed()` selectors. There is no NgRx, no Akita, no second state-management library layered on top — a signal and a `computed` were judged sufficient, and so far they have been.
+- **Functional HTTP interceptors.** `apiKeyInterceptor` and `errorMappingInterceptor`, both plain functions registered via `provideHttpClient(withInterceptors([...]))` in `app.config.ts` — no class-based `HttpInterceptor` anywhere. The first one stamps every outgoing request to the backend with the dev `X-Api-Key` header; the second one catches every failed response and normalizes it into a single `ApiError` shape (`network`, `validation`, `notFound`, `conflict`, `unknown`, …) so components never have to sniff an `HttpErrorResponse` or a raw `ProblemDetails` payload directly.
+- **Reactive forms.** The one form that currently exists — starting a new officer career in `StartCareerComponent` — is built with `FormBuilder.nonNullable.group(...)` and `Validators`, not template-driven bindings. Submission is blocked and the form is marked `touched` if client-side validation fails, but the backend's own validation (and the one-active-officer-per-player rule) is still the actual authority — the frontend's validators exist to give faster feedback, not to replace the one on the other side of the wire.
+- **Lazy, feature-based routing.** `app.routes.ts` lazy-loads every feature (`officers`, `player`, `cemetery`, `statistics`, `population`, `draft`) via `loadComponent` / `loadChildren`, so the initial bundle only pays for the dashboard shell. `officers` and `player` each have their own nested `*.routes.ts` rather than being flattened into the root route table.
+
+### What the client actually shows
+
+- **Dashboard** — a landing page summarizing the current officer (if any) and linking into the rest of the app.
+- **Officers** — the list view (`GET /draft/officers`) and a detail view per officer (`GET /draft/officers/{id}/stats`), including the lifecycle actions (leave, return, resign, retire, fire) as buttons wired straight to their respective endpoints.
+- **Player / Start Career** — the reactive form described above, calling `POST /draft/players/{playerId}/officers`. On success it redirects to the new officer's detail page; on a conflict (player already has an active officer) it surfaces the backend's own error message rather than inventing one.
+- **Cemetery** and **Statistics** — read-only views over `GET /population/cemetery` and `GET /population/lifecycle-statistics`.
+- **Population** and **Draft** — deliberately *not* fully functional yet. They render a `BackendGapPlaceholderComponent` explaining exactly what's missing instead of faking a citizen list or a working draft form against an endpoint that doesn't exist. See the next paragraph.
+
+### Known backend gaps, written down on purpose
+
+While building the client, a few holes in the API surface became impossible to ignore — there's no endpoint to list or search citizens, no way to discover a `Player` other than the one hardcoded seed, and the API key is a shared dev secret with no real per-caller identity behind it. Rather than papering over these with client-side guesswork (a fake citizen list, a made-up player directory), the client shows an honest "not available yet" state and the reasoning behind it is written down in [`MilitaryDraftSystem.Web/BACKEND-GAPS.md`](MilitaryDraftSystem.Web/BACKEND-GAPS.md). It's a short, worthwhile read if you're about to extend the frontend and wonder why a screen is a placeholder instead of a form — better to confess a gap plainly than to build a wall and whitewash it, per the Book of Ezekiel's low opinion of that approach (13:10).
+
+### Running the frontend
+
+```bash
+cd MilitaryDraftSystem.Web
+npm install
+npm start      # ng serve, proxied to the API via proxy.conf.json
+npm run build  # production build into dist/
+npm test       # unit tests via Vitest
+```
+
+The dev server proxies API calls to the backend (see `proxy.conf.json`), so both processes are expected to run side by side locally — this is still two deployable units, not one.
+
 ## What's deliberately out of scope
 
 A couple of things are still simplified by design, not because they were forgotten:
@@ -218,3 +268,4 @@ A couple of things are still simplified by design, not because they were forgott
 - `Summons` attendance/expiry is not driven by any timer yet — the lifecycle methods exist on the entity but nothing currently calls `MarkAttended`, `MarkMissed`, `Cancel` or `Expire`. If you need that, it would be a new background service similar to the existing ones.
 - The API key is a single shared secret with no per-officer identity — `DraftCitizenCommand` still takes `recruitmentOfficerId` as a request parameter rather than deriving it from the caller's identity, so anyone with the key can still act as any officer.
 - `Player` support is single-player in practice: the seed data creates exactly one `Player`, and nothing in the API currently authenticates a caller as a specific player — `StartOfficerCareerCommand` still takes `playerId` as a request parameter. The one-active-officer-per-player rule is already enforced in the domain/application layer, so the model is ready for multiple players, but nothing wires that up yet.
+- The frontend's Population and Draft screens are placeholders for exactly the reasons above — not missing by accident, but blocked on backend endpoints that don't exist yet. `MilitaryDraftSystem.Web/BACKEND-GAPS.md` is the canonical list; update it (and the corresponding placeholder) together whenever one of these gaps gets closed.
