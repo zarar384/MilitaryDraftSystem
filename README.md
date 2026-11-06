@@ -16,6 +16,12 @@ The solution follows a fairly standard Clean Architecture split:
 
 There is no separate "worker" project — the API project hosts both the HTTP endpoints and the background simulation, since ASP.NET Core's `WebApplication` is also a generic host that can run `IHostedService` implementations alongside the web server.
 
+## Origins
+
+This project started as a small learning experiment focused on MediatR and hosted background services in ASP.NET Core. As new concepts and ideas were explored, it gradually evolved into a larger full-stack simulation with its own domain model, application architecture, persistent world state, background simulation and web client.
+
+The original version is preserved in the [project graveyard](https://github.com/zarar384/my_git_test/tree/master/project-graveyard/military-draft-system-mediatr), where the project's earlier development can still be traced.
+
 ## Startup
 
 Everything is wired up in `MilitaryDraftSystem.API/Program.cs`. Reading it top to bottom tells you what actually exists in the system:
