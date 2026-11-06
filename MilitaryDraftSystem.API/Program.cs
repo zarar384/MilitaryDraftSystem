@@ -252,9 +252,15 @@ try
 
     Log.Information("MilitaryDraftSystem.API shut down gracefully.");
 }
-catch (Exception ex)
+catch (Exception ex) when (ex is not HostAbortedException)
 {
     Log.Fatal(ex, "MilitaryDraftSystem.API terminated unexpectedly during startup.");
+
+    // Make sure the process actually reports failure: without this, a
+    // startup exception (e.g. ValidateOnStart, failed migrations) would
+    // still result in a zero exit code because the exception is caught
+    // here only to guarantee logs are flushed before shutdown.
+    Environment.ExitCode = 1;
 }
 finally
 {
